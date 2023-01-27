@@ -1,0 +1,24 @@
+[package]
+name = "custom_source_bin"
+version = "0.1.0"
+edition = "2021"
+license = "unknown"
+repository = "Not defined yet"
+description = "GStreamer customSourceBin plugin"
+authors = ["Rodrigo Santos <rsantos@sequence.film"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "gstcustomsource"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+gst = { version = "0.19.7", package = "gstreamer" }
+gst-base = { version = "0.19.3", package = "gstreamer-base" }
+ges = { version = "0.19.4", package = "gstreamer-editing-services" }
+once_cell = "1.17.0"
+url = "2.3.1"
+
+[build-dependencies]
+gst-plugin-version-helper = "0.7.5"
