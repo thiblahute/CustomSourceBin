@@ -9,7 +9,7 @@ pub fn register(plugin: &gst::Plugin) -> Result<(), glib::BoolError> {
     gst::Element::register(
         Some(plugin),
         "customsource",
-        gst::Rank::Primary,
+        gst::Rank::Primary + 1,
         CustomSource::static_type(),
     )
 }
