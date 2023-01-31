@@ -21,7 +21,6 @@ mod imp {
     use url::Url;
 
     use std::str::FromStr;
-    use std::{sync::Mutex};
 
     use once_cell::sync::Lazy;
 
@@ -33,101 +32,8 @@ mod imp {
         )
     });
 
-    struct State {
-        filesrc: gst::Element,
-    }
-
-    pub struct CustomSource {
-        srcpad: gst::GhostPad,
-        state: Mutex<Option<State>>,
-    }
-
-    impl CustomSource {
-        fn build_state() -> Result<State, glib::Error>{
-            let filesrc = gst::ElementFactory::make("filesrc")
-                .name("filesrc")
-                .build()
-                .unwrap();
-
-            Ok(State { filesrc })
-        }
-
-        fn range(
-            &self,
-            pad: &gst::GhostPad,
-            offset: u64,
-            buffer: Option<&mut gst::BufferRef>,
-            size: u32,
-        ) -> Result<gst::PadGetRangeSuccess, gst::FlowError> {
-            let target_src_pad = pad.target().unwrap();
-
-            gst::debug!(CAT, obj: pad, "range: {pad:?}");
-
-            let ret = match buffer {
-                    Some(buffer) => {
-                        match target_src_pad.range_fill(offset, buffer, size) {
-                            Ok(..) => Ok(gst::PadGetRangeSuccess::FilledBuffer),
-                            Err(err) => {
-                                gst::error!(CAT, obj: pad, "Error: {err:?}");
-                                Err(err)
-                            },
-                        }
-                    },
-                    None => {
-                        match target_src_pad.range(offset, size) {
-                            Ok(buffer) => Ok(gst::PadGetRangeSuccess::NewBuffer(buffer)),
-                            Err(err) => {
-                                gst::error!(CAT, obj: pad, "Error: {err:?}");
-                                Err(err)
-                            },
-                        }
-                    }
-                };
-
-            gst::debug!(CAT, obj: pad, "end range: {ret:?}");
-
-            ret
-        }
-
-        fn pad_activate(&self, pad: &gst::GhostPad) -> Result<(), gst::LoggableError> {
-            gst::debug!(CAT, obj: pad, "activate {pad:?}");
-
-            pad.activate_mode(gst::PadMode::Pull, true)?;
-            Ok(())
-        }
-
-        fn src_activatemode(
-            &self,
-            pad: &gst::GhostPad,
-            mode: gst::PadMode,
-            active: bool,
-        ) -> Result<(), gst::LoggableError> {
-            gst::debug!(CAT, obj: pad, "activatemode: {mode:?} ({active:?})");
-
-            match mode {
-                gst::PadMode::Pull => {
-                    pad
-                        .target()
-                        .unwrap()
-                        .activate_mode(mode, active)
-                        .map_err(gst::LoggableError::from)?;
-
-                    Ok(())
-                }
-                gst::PadMode::Push => Err(gst::loggable_error!(CAT, "Push mode not supported")),
-                _ => Err(gst::loggable_error!(
-                    CAT,
-                    "Failed to activate the pad in Unknown mode, {:?}",
-                    mode
-                )),
-            }
-        }
-
-        fn src_event(&self, pad: &gst::GhostPad, event: gst::Event) -> bool {
-            gst::log!(CAT, obj: pad, "Handling event on srcpad {:?}", event.view());
-            gst::Pad::event_default(pad, Some(&*self.obj()), event)
-        }
-    }
+    #[derive(Debug, Default)]
+    pub struct CustomSource { }
 
     #[glib::object_subclass]
     impl ObjectSubclass for CustomSource {
@@ -135,56 +41,6 @@ mod imp {
         type Type = super::CustomSource;
         type ParentType = gst::Bin;
         type Interfaces = (gst::URIHandler,);
-
-        fn with_class(klass: &Self::Class) -> Self {
-            let templ = klass.pad_template("src").unwrap();
-
-            let srcpad = gst::GhostPad::builder_with_template(&templ, Some("src"))
-                .getrange_function(|pad, parent, offset, buffer, size| {
-                    CustomSource::catch_panic_pad_function(
-                        parent,
-                        || Err(gst::FlowError::Error),
-                        |source| source.range(pad, offset, buffer, size),
-                    )
-                })
-                .activate_function(|pad, parent| {
-                    CustomSource::catch_panic_pad_function(
-                        parent,
-                        || {
-                            Err(gst::loggable_error!(
-                                CAT,
-                                "Panic activating srcpad with mode"
-                            ))
-                        },
-                        |source| source.pad_activate(pad),
-                    )
-                })
-                .activatemode_function(|pad, parent, mode, active| {
-                    CustomSource::catch_panic_pad_function(
-                        parent,
-                        || { 
-                            Err(gst::loggable_error!(
-                                CAT,
-                                "Panic activating srcpad with mode"
-                            ))
-                        },
-                        |customsource| customsource.src_activatemode(pad, mode, active),
-                    )
-                })
-                .event_function(|pad, parent, event| {
-                    CustomSource::catch_panic_pad_function(
-                        parent,
-                        || false,
-                        |source| source.src_event(pad, event),
-                    )
-                })
-                .build();
-
-            Self {
-                srcpad,
-                state: Mutex::new(None),
-            }
-        } 
     }
 
     impl ObjectImpl for CustomSource {
@@ -202,75 +58,47 @@ mod imp {
         }
 
         fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
-            let state = self.state.lock().unwrap();
-
             gst::debug!(CAT, "Setting property {:?}: {value:?}", pspec.name());
-            if let Some(state) = &*state {
-                match pspec.name() {
-                    "location" => {
-                        let location = value.get::<String>().unwrap();
+            match pspec.name() {
+                "location" => {
+                    let location = value.get::<String>().unwrap();
 
-                        gst::debug!(CAT, imp: self, "Setting filesrc location: {location:?}");
-                        state.filesrc.set_property("location", location.as_str());
-                    },
-                    _ => (),
-                }
-            }
-            else {
-                gst::error!(CAT, "Cannot set properties before internal state has been built");
+                    gst::debug!(CAT, imp: self, "Setting filesrc location: {location:?}");
+                    self.obj().by_name("filesrc").unwrap().set_property("location", location.as_str());
+                },
+                _ => (),
             }
         }
 
         fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
             gst::debug!(CAT, "Getting property: {:?}", pspec.name());
 
-            let state = self.state.lock().unwrap();
-
-            if let Some(state) = &*state {
-                match pspec.name() {
-                    "location" => {
-                        state.filesrc.property::<Option<String>>("location").to_value()
-                    },
-                    _ => unimplemented!(),
-                }
-            }
-            else {
-                gst::element_error!(
-                    self.obj(),
-                    gst::LibraryError::Failed,
-                    ["Cannot get property before state has been built"]);
-
-                unimplemented!()
+            match pspec.name() {
+                "location" => {
+                    self.obj().by_name("filesrc").unwrap().property::<Option<String>>("location").to_value()
+                },
+                _ => unimplemented!(),
             }
         }
 
         fn constructed(&self) {
             self.parent_constructed();
 
-            *self.state.lock().unwrap() = match CustomSource::build_state() {
-                Ok(state) => {
-                    let obj = self.obj();
+            let obj = self.obj();
 
-                    obj.add_many(&[
-                        &state.filesrc,
-                    ]).expect("Could not add elements to bin");
 
-                    self.srcpad.set_target(Some(&state.filesrc.static_pad("src").unwrap())).expect("Set ghostpad target failed");
+            let filesrc = gst::ElementFactory::make("filesrc").name("filesrc").build().unwrap();
+            let identity = gst::ElementFactory::make("identity").build().unwrap();
 
-                    if let Err(err) = obj.add_pad(&self.srcpad) {
-                        gst::error!(CAT, imp: self, "Error adding pad to element: {err:?}");
-                        None
-                    }
-                    else {
-                        Some(state) 
-                    }
-                },
-                Err(err) => {
-                    gst::error!(CAT, imp: self, "Error building state: {err:?}");
-                    None
-                },
-            }
+            obj.add_many(&[&filesrc, &identity]).expect("Could not add elements to bin");
+            filesrc.link(&identity).unwrap();
 
+            let templ = obj.pad_template("src").unwrap();
+            let srcpad = gst::GhostPad::builder_with_template(&templ, Some("src")).build();
+
+            srcpad.set_target(Some(&identity.static_pad("src").unwrap())).expect("Set ghostpad target failed");
+
+            obj.add_pad(&srcpad).expect("Couldn't add src pad?!");
         }
     }
 
@@ -331,21 +159,14 @@ mod imp {
         }
 
         fn uri(&self) -> Option<String> {
-            let state = self.state.lock().unwrap();
 
-            if let Some(state) = &*state {
-                let location: String = state.filesrc.property("location");
-                let url = Url::from_file_path(location)
-                    .expect("CustomSource::get_uri couldn't build `Url` from `location`");
-                
-                Some (
-                    String::from(url.as_str())
-                )
-            }
-            else {
-                gst::error!(CAT, imp: self, "Cannot get uri before state has been built");
-                None
-            }
+            let location: String = self.obj().by_name("filesrc").unwrap().property("location");
+            let url = Url::from_file_path(location)
+                .expect("CustomSource::get_uri couldn't build `Url` from `location`");
+
+            Some (
+                String::from(url.as_str())
+            )
         }
 
         fn set_uri(&self, uri: &str) -> Result<(), glib::Error> {
@@ -355,11 +176,11 @@ mod imp {
 
                     let url = Url::from_str(uri.as_str()).unwrap();
                     match url.to_file_path() {
-                        Ok(file_path) =>  { 
+                        Ok(file_path) =>  {
                             let file_path = file_path
                                 .as_os_str()
                                 .to_str();
-                            
+
                             if let Some(file_path) = file_path {
                                 Some(String::from(file_path))
                             }
@@ -385,7 +206,7 @@ mod imp {
             else {
                 Err(
                     glib::Error::new(
-                        gst::URIError::BadUri, 
+                        gst::URIError::BadUri,
                         "Could not set file location")
                 )
             }
