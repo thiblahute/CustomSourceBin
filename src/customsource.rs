@@ -142,7 +142,12 @@ mod imp {
             gst::debug!(CAT, imp: self, "{transition:?}");
 
             // Call the parent class' implementation of ::change_state()
-            let ret = self.parent_change_state(transition);
+            let ret = if transition != gst::StateChange::NullToReady {
+                self.parent_change_state(transition)
+            } else {
+                gst::warning!(CAT, "FIXME in GstBin - bypassing bin change state to avoid pads deactivation");
+                Ok(gst::StateChangeSuccess::Success)
+            };
 
             gst::debug!(CAT, imp: self, "{ret:?}");
             ret
